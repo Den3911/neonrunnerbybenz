@@ -212,28 +212,69 @@ const UPG = {
 /* =========================================================
    SAVE (personal) + LEADERBOARD (shared)
 ========================================================= */
+/* ===== PASTE YOUR FIREBASE REALTIME DATABASE URL BETWEEN THE QUOTES BELOW =====
+   It looks like:  https://neon-dash-xxxx-default-rtdb.firebaseio.com
+   (or a regional one ending in  .firebasedatabase.app )
+   Leave it as ""  to run single-machine with no shared leaderboard.            */
+const FIREBASE_URL = "https://neon-dash-99eb3-default-rtdb.europe-west1.firebasedatabase.app";
+/* ============================================================================ */
+
 const SAVE_KEY='neondash:save:v1';
 const BOARD_KEY='neondash:leaderboard:v1';
 let save={coins:0,bestScore:0,upg:{magnet:0,coin:0,shield:false},skins:['aurora'],skin:'aurora',level:0};
 let memBoard=[];
 
+// personal progress store: Claude preview -> window.storage, hosted site -> localStorage, else memory
+const memKV={};
+async function kvGet(key){
+  try{ if(window.storage){ const r=await window.storage.get(key,false); return r&&r.value?r.value:null; } }catch(e){}
+  try{ const v=localStorage.getItem(key); if(v!==null) return v; }catch(e){}
+  return memKV[key]||null;
+}
+async function kvSet(key,val){
+  try{ if(window.storage){ await window.storage.set(key,val,false); return; } }catch(e){}
+  try{ localStorage.setItem(key,val); return; }catch(e){}
+  memKV[key]=val;
+}
+
 async function loadSave(){
-  try{ if(window.storage){ const r=await window.storage.get(SAVE_KEY,false);
-    if(r&&r.value){ const d=JSON.parse(r.value);
+  try{ const v=await kvGet(SAVE_KEY);
+    if(v){ const d=JSON.parse(v);
       save.coins=d.coins||0; save.bestScore=d.bestScore||0; save.level=d.level||0;
       save.upg=Object.assign({magnet:0,coin:0,shield:false},d.upg||{});
       save.skins=Array.isArray(d.skins)?d.skins:['aurora']; if(!save.skins.includes('aurora'))save.skins.push('aurora');
       save.skin=d.skin||'aurora';
     }
-  }}catch(e){}
+  }catch(e){}
 }
-async function persist(){ try{ if(window.storage){ await window.storage.set(SAVE_KEY,JSON.stringify(save),false); } }catch(e){} }
+async function persist(){ try{ await kvSet(SAVE_KEY,JSON.stringify(save)); }catch(e){} }
 
+function fbBase(){ return FIREBASE_URL.replace(/\/+$/,''); }
+
+// shared leaderboard: Firebase if configured, else Claude-preview shared store, else this machine
 async function loadBoard(){
+  if(FIREBASE_URL){
+    try{
+      const res=await fetch(fbBase()+'/scores.json');
+      if(res.ok){
+        const data=await res.json();
+        if(!data) return [];
+        const arr=Object.keys(data).map(k=>({n:data[k].n,s:data[k].s}));
+        arr.sort((a,c)=>c.s-a.s);
+        return arr.slice(0,10);
+      }
+    }catch(e){}
+  }
   try{ if(window.storage){ const r=await window.storage.get(BOARD_KEY,true); if(r&&r.value) return JSON.parse(r.value); return []; } }catch(e){}
   return memBoard.slice();
 }
 async function saveScore(name,score){
+  if(FIREBASE_URL){
+    try{
+      await fetch(fbBase()+'/scores.json',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({n:name,s:score,t:Date.now()})});
+      return await loadBoard();
+    }catch(e){}
+  }
   let b=await loadBoard(); b.push({n:name,s:score}); b.sort((a,c)=>c.s-a.s); b=b.slice(0,10); memBoard=b;
   try{ if(window.storage){ await window.storage.set(BOARD_KEY,JSON.stringify(b),true); } }catch(e){}
   return b;
